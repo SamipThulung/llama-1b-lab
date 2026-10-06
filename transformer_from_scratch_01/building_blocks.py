@@ -248,9 +248,4 @@ class TransformerBlock(nn.Module):
 
 
 
-d_model = 512
-num_heads = 8
-vocab_size = 10001
-context_length = 1024
-raw_d_ff = (8/3) * d_model
-d_ff = int(round( raw_d_ff / 64) * 64)
+

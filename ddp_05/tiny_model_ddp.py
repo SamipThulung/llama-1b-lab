@@ -114,7 +114,7 @@ def distributed(rank, world_size, losses):
       work = dist.all_reduce(flattened_grad, op=dist.ReduceOp.SUM, async_op = True)
       work.wait()
 
-    with time_block("Post Scatter normalization and unflattening"):
+    with time_block("Post gather normalization and unflattening"):
       flattened_grad /= world_size
       unflat_grads = torch._utils._unflatten_dense_tensors(flattened_grad, grads)
 
