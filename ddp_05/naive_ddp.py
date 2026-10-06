@@ -4,7 +4,7 @@ import torch.distributed as dist
 import os
 import torch.nn.functional as F
 import torch.multiprocessing as mp
-from naive_bpe_dataset import MemmapTokenDataset
+from ddp_05.naive_dataset import MemmapTokenDataset
 from transformer_from_scratch_01.transformer import TransformerLM
 import time
 from contextlib import contextmanager
@@ -33,6 +33,9 @@ MASTER_ADDR = "localhost"
 MASTER_PORT = "29500"
 BACKEND = "nccl"
 
+FILEPATH = "dataset_03/TinyStories-train.bin"
+
+
 @contextmanager
 def time_block(name="Code block"):
     start = time.perf_counter()
@@ -48,16 +51,23 @@ def setup(rank, world_size):
 
   dist.init_process_group(backend=BACKEND,rank = rank, world_size = WORLD_SIZE)
 
-def distributed(rank, world_size):
+def distributed(rank, world_size, losses):
   setup(rank, world_size)
 
   device = torch.device(f"cuda:{rank}")
+  mask = torch.tril(
+      torch.ones(
+          CONTEXT_LENGTH,
+          CONTEXT_LENGTH,
+          dtype=torch.bool,
+          device=device))
 
   with time_block("Load model and Optimizer"):
     model = TransformerLM(
         context_length = CONTEXT_LENGTH,
         vocab_size = VOCAB_SIZE,
-        model_size = 's'
+        model_size = 'n',
+        mask = mask
         ).to(device)
 
     optimizer = torch.optim.AdamW(
@@ -77,14 +87,14 @@ def distributed(rank, world_size):
 
   with time_block("Load dataset"):
     train_dataset = MemmapTokenDataset(
-        file_path = "TinyStories-train.bin",
+        file_path = FILEPATH,
         seq_len = CONTEXT_LENGTH,
         split="train",
         train_fraction=0.99
         )
 
     val_dataset = MemmapTokenDataset(
-        file_path = "TinyStories-train.bin",
+        file_path = FILEPATH,
         seq_len = CONTEXT_LENGTH,
         split="val",
         train_fraction=0.99,
@@ -96,7 +106,7 @@ def distributed(rank, world_size):
     torch.cuda.synchronize(device)
 
   print("Training")
-  for i in range(epoch):
+  for i in range(EPOCH):
 
     with time_block("Getting batch and loading to device"):
       x, y = train_dataset.get_batch(BATCH//WORLD_SIZE)
@@ -125,11 +135,11 @@ def distributed(rank, world_size):
     with time_block("All reduce Operation"):
       dist.all_reduce(flattened_grad, op=dist.ReduceOp.SUM)
 
-    with time_block("Post gather normalization and unflattening")
+    with time_block("Post gather normalization and unflattening"):
       flattened_grad /= world_size
       unflat_grads = torch._utils._unflatten_dense_tensors(flattened_grad, grads)
 
-    with time_block(f"Copying Grad to the current rank {rank}")
+    with time_block(f"Copying Grad to the current rank {rank}"):
       for param, grad in zip(params, unflat_grads):
           param.grad.copy_(grad)
 
@@ -150,8 +160,14 @@ if __name__ == "__main__":
 
   mp.spawn(
       distributed,
-      args=(world_size,loss_queue),
-      nprocs=world_size,
+      args=(WORLD_SIZE,loss_queue),
+      nprocs=WORLD_SIZE,
       join=True)
+
+  losses = []
+  while not loss_queue.empty():
+      losses.append(loss_queue.get())
+  for i, loss in losses:
+        print(f"Epoch: {i}, loss: {loss:.5f}")
 
 

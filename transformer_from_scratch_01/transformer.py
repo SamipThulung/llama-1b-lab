@@ -1,5 +1,9 @@
-from building_blocks import Embedding, TransformerBlock, RMSNorm, LinearProjection
-from config import S_MODEL, M_MODEL, L_MODEL, XL_MODEL
+from transformer_from_scratch_01.building_blocks import Embedding, TransformerBlock, RMSNorm, LinearProjection
+from transformer_from_scratch_01.config import N_MODEL, S_MODEL, M_MODEL, L_MODEL, XL_MODEL
+import torch
+from torch import nn
+
+
 
 class TransformerLM(nn.Module):
   def __init__(
@@ -8,10 +12,12 @@ class TransformerLM(nn.Module):
       context_length: int,
       theta: float = 10000.,
       mask: torch.Tensor | None = None,
-      model_size: 's'|'m'|'l'|'xl' = 'm'):
+      model_size: str = 'm'):
 
     super().__init__()
 
+    if model_size == 'n':
+    	(d_model, d_ff, num_layers, num_heads) = (value for k, value in N_MODEL.items())
     if model_size == 's':
     	(d_model, d_ff, num_layers, num_heads) = (value for k, value in S_MODEL.items())
     if model_size == 'm':
@@ -27,11 +33,12 @@ class TransformerLM(nn.Module):
     self.layers = nn.ModuleList([
         TransformerBlock(
             d_model = d_model,
-            num_heads = nums_heads,
+            num_heads = num_heads,
             context_length = context_length,
             d_ff = d_ff,
-            theta = theta
-        ) for _ in range(layers)
+            theta = theta,
+            mask = mask
+        ) for _ in range(num_layers)
     ])
 
     self.final_norm = RMSNorm(d_model)

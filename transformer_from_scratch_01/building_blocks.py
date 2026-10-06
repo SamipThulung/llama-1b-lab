@@ -161,7 +161,7 @@ class MultiHeadAttention(nn.Module):
       d_model: int,
       num_head: int,
       context_length: int,
-      mask: torchTensor | None = None, 
+      mask: torch.Tensor | None = None, 
       theta: float = 10000.0
   ):
       super().__init__()
