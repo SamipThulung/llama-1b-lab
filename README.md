@@ -9,7 +9,7 @@ but runs only to some steps in l size model
 loss after 100 epoch
 s 1.9 loss 
 m 2.01
-l not computed. 
+l Step: 99, loss: 2.76701
 
 FSDP:
 TINY MODEL

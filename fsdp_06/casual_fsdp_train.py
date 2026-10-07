@@ -4,18 +4,27 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
     
 from fsdp_06.fsdp_wrapper import FSDP
-from transformer_from_scratch_01.toy_model import TinyModel
+from transformer_from_scratch_01.transformer import TransformerLM
 import random
 import numpy as np
 import time
 
 from contextlib import contextmanager
 import torch.nn.functional as F
+from ddp_05.naive_dataset import MemmapTokenDataset
 
-BATCH_SIZE = 16
+BATCH_SIZE = 4
 CONTEXT_LENGTH = 512
 VOCAB_SIZE = 10001
 EPOCH = 100
+MODEL_SIZE = "l"
+
+# Optimizer
+LR = 1e-3
+BETA1 = 0.9
+BETA2 = 0.999
+EPS = 1e-8
+WEIGHT_DECAY = 0.1
 
 MASTER_ADDR = "localhost"
 MASTER_PORT = "29500"
@@ -24,6 +33,7 @@ WORLD_SIZE = 2
 VERBOSE_TIMING = True
 
 _COMM_STREAM = None
+FILEPATH = "dataset_03/TinyStories-train.bin"
 
 def _get_comm_stream():
     global _COMM_STREAM
@@ -65,12 +75,28 @@ def train(rank, world_size, losses):
     np.random.seed(seed)
     torch.manual_seed(seed)
 
+    mask = torch.tril(
+        torch.ones(CONTEXT_LENGTH, CONTEXT_LENGTH, dtype=torch.bool, device=device)
+    )
+
     with time_block("Model loaded"):
-        model = TinyModel().to(device)
+        model = TransformerLM(
+            context_length=CONTEXT_LENGTH,
+            vocab_size=VOCAB_SIZE,
+            model_size=MODEL_SIZE,
+            mask=mask,
+        ).to(device)
+
 
     with time_block("Model wrapped"):
         model = FSDP(model, _get_comm_stream, compute_dtype=torch.bfloat16)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=LR,
+            betas=(BETA1, BETA2),
+            eps=EPS,
+            weight_decay=WEIGHT_DECAY,
+        )
     total_params = sum(p.numel() for p in model.parameters())
     if rank == 0:
         print(total_params, f"{total_params / 1e6:.2f}M", flush=True)
@@ -80,15 +106,40 @@ def train(rank, world_size, losses):
         targets = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE, CONTEXT_LENGTH), device=device)
 
     with time_block("Warmup"):
-        for _ in range(5):
-            model(x)
+        with torch.no_grad():
+            for _ in range(5):
+                model(x)
+            for layer in model._layers:
+                layer._release_gather_weights()
+    del x
+    torch.cuda.empty_cache()
+
+    with time_block("Load dataset", rank):
+        train_dataset = MemmapTokenDataset(
+            file_path=FILEPATH,
+            seq_len=CONTEXT_LENGTH,
+            split="train",
+            train_fraction=0.99,
+        )
+        val_dataset = MemmapTokenDataset(  # noqa: F841 (unused for now)
+            file_path=FILEPATH,
+            seq_len=CONTEXT_LENGTH,
+            split="val",
+            train_fraction=0.99,
+        )
+    
         
     for i in range(EPOCH):
+        
+        with time_block("Getting batch and loading to device", rank):
+            x, y = train_dataset.get_batch(BATCH_SIZE // WORLD_SIZE)
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
     
         with time_block(f"Forward pass rank: {rank}"):
             optimizer.zero_grad(set_to_none=True)
-            logits = model(x)
-            loss = F.cross_entropy(logits.reshape(-1, VOCAB_SIZE).float(), targets.reshape(-1))
+            y_hat = model(x)
+            loss = F.cross_entropy(y_hat.reshape(-1, y_hat.size(-1)).float(), y.reshape(-1))
         
         with time_block(f"Backward pass rank: {rank}"):
             loss.backward()
@@ -105,7 +156,9 @@ def train(rank, world_size, losses):
         if rank == 0:
             losses.put((i, loss_val))
             print(f"Epoch{i}: loss = {loss.item():.4f}")
-
+    del x
+    del y
+    torch.cuda.empty_cache()
     cleanup()
 
 
