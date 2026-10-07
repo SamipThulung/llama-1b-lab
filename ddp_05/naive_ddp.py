@@ -66,7 +66,7 @@ def distributed(rank, world_size, losses):
     model = TransformerLM(
         context_length = CONTEXT_LENGTH,
         vocab_size = VOCAB_SIZE,
-        model_size = 'n',
+        model_size = 's',
         mask = mask
         ).to(device)
 
@@ -77,11 +77,13 @@ def distributed(rank, world_size, losses):
         eps=EPS,
         weight_decay=WEIGHT_DECAY
         )
-
+  total_params = sum(p.numel() for p in model.parameters())
   with time_block("Warm up"):
     x = torch.randint(low=0, high=10001, size=(16, 512))
     for j in range(0,5):
       model(x)
+    
+    print(total_params, f"{total_params / 1e6:.2f}M")
     del x
 
 
