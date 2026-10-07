@@ -1,4 +1,4 @@
-# nccl_test.py
+# nccl_test.py on 2 gpu
 import os, time, torch, torch.distributed as dist, torch.multiprocessing as mp
 
 def run(rank, ws):
