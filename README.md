@@ -21,8 +21,19 @@ pkill -9 -f naive_ddp
 
 Git sshkey
 git remote set-url origin git@github.com:SamipThulung/llama-1b-lab.git
-ssh-keygen -t ed25519 -C "samipthulung3@gmail.com"
-cat ~/.ssh/id_ed25519.pub
 git config --global user.email "samipthulung3@gmail.com"
 git config --global user.name "SamipThulung"
+ssh-keygen -t ed25519 -C "samipthulung3@gmail.com"
+cat ~/.ssh/id_ed25519.pub
+
 git push origin main
+
+Fetch GitHub's host key into known_hosts
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts
+
+Verifying-finger print
+ssh-keygen -lf ~/.ssh/known_hosts
+Test Authentication
+ssh -T git@github.com
+
