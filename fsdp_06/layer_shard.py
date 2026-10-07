@@ -1,5 +1,6 @@
 from fsdp_06.shard_base import SharedBase
 from fsdp_06.custom_autograd_functions import ShardedLinearFunc, ShardedEmbeddingFunc
+from torch import nn
 
 class ShardedLinear(SharedBase):
     def __init__(self, original: nn.Linear, rank, world_size, compute_dtype):

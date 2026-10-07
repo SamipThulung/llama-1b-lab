@@ -2,10 +2,15 @@ import os
 import torch
 import torch.distributed as dist 
 import torch.multiprocessing as mp
+    
 from fsdp_06.fsdp_wrapper import FSDP
 from transformer_from_scratch_01.toy_model import TinyModel
+import random
+import numpy as np
+import time
 
 from contextlib import contextmanager
+import torch.nn.functional as F
 
 BATCH_SIZE = 16
 CONTEXT_LENGTH = 512
@@ -16,6 +21,15 @@ MASTER_ADDR = "localhost"
 MASTER_PORT = "29500"
 
 WORLD_SIZE = 2
+VERBOSE_TIMING = True
+
+_COMM_STREAM = None
+
+def _get_comm_stream():
+    global _COMM_STREAM
+    if _COMM_STREAM is None:
+        _COMM_STREAM = torch.cuda.Stream()
+    return _COMM_STREAM
 
 
 @contextmanager
@@ -42,7 +56,7 @@ def cleanup():
     dist.destroy_process_group()
 
 
-def train(rank, world_size):
+def train(rank, world_size, losses):
     setup(rank, world_size)
     device = torch.device(f"cuda:{rank}")
 
@@ -55,9 +69,8 @@ def train(rank, world_size):
         model = TinyModel().to(device)
 
     with time_block("Model wrapped"):
-        model = FSDP(model, compute_dtype=torch.bfloat16)
+        model = FSDP(model, _get_comm_stream, compute_dtype=torch.bfloat16)
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-
     total_params = sum(p.numel() for p in model.parameters())
     if rank == 0:
         print(total_params, f"{total_params / 1e6:.2f}M", flush=True)
@@ -76,10 +89,10 @@ def train(rank, world_size):
             optimizer.zero_grad(set_to_none=True)
             logits = model(x)
             loss = F.cross_entropy(logits.reshape(-1, VOCAB_SIZE).float(), targets.reshape(-1))
-
+        
         with time_block(f"Backward pass rank: {rank}"):
             loss.backward()
-
+        
         print(f"[Rank{rank}] Epoch{i}: loss = {loss.item():.4f}")
 
         with time_block(f"Gradient Synchronize"):
@@ -87,8 +100,10 @@ def train(rank, world_size):
 
         with time_block(f"Updating parameters"):
             optimizer.step()
-
+            
+        loss_val = loss.item()
         if rank == 0:
+            losses.put((i, loss_val))
             print(f"Epoch{i}: loss = {loss.item():.4f}")
 
     cleanup()
@@ -101,7 +116,7 @@ if __name__ == "__main__":
     loss_queue = ctx.Queue()
 
     mp.spawn(
-        distributed,
+        train,
         args=(WORLD_SIZE, loss_queue),
         nprocs=WORLD_SIZE,
         join=True,

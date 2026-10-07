@@ -11,6 +11,10 @@ s 1.9 loss
 m 2.01
 l not computed. 
 
+FSDP:
+TINY MODEL
+ls = Step: 99, loss: 6.62315
+
 Kill process
 pkill -9 -f "multiprocessing.spawn"
 pkill -9 -f naive_ddp

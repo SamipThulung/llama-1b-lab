@@ -1,4 +1,3 @@
-
 import torch
 from torch import nn
 import math
@@ -12,8 +11,6 @@ class SharedBase(nn.Module):
         self.rank = rank
         self.world_size = world_size
         self.compute_dtype = compute_dtype  # may be None -> use param dtype
-
-        self.comm_stream = _get_comm_stream()
 
         self.register_parameter("bias", None)
         self.original_bias_shape = 0
