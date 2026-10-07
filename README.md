@@ -15,3 +15,6 @@ Git sshkey
 git remote set-url origin git@github.com:SamipThulung/llama-1b-lab.git
 ssh-keygen -t ed25519 -C "samipthulung3@gmail.com"
 cat ~/.ssh/id_ed25519.pub
+git config --global user.email "samipthulung3@gmail.com"
+git config --global user.name "SamipThulung"
+git push origin main
