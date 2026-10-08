@@ -51,4 +51,11 @@ s iteration  199 | lr 3.00e-05 | loss 1.7078 | grad_norm 0.7362759113771518 | st
 iteration  999 | lr 3.00e-05 | loss 1.4359 | grad_norm 0.7253650929893452 | step_ok True
 
 m iteration   99 | lr 3.01e-05 | loss 1.8072 | grad_norm 0.8433550864141988 | step_ok True
+miteration 1999 | lr 3.00e-05 | loss 1.3523 | grad_norm 0.7049172342023569 | step_ok True
+
+
 l iteration   99 | lr 3.01e-05 | loss 1.9120 | grad_norm 1.2634242668657127 | step_ok True
+
+Generated output:
+There is a lot of things that I can do with my own. I have a lot of fun and I can’t get to know what I’m doing. I
+
