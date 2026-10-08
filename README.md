@@ -37,3 +37,18 @@ ssh-keygen -lf ~/.ssh/known_hosts
 Test Authentication
 ssh -T git@github.com
 
+echo "filename.txt" >> .gitignore
+
+Initial run megatron
+pip install -r requirements.txt
+python -m dataset_03.megatron_data
+torchrun --nproc_per_node=2 -m megatron_07.megatron_train
+NCCL_P2P_DISABLE=1 python -m megatron_07.megatron_train # for l4 gpu
+niteration   99 | lr 3.01e-05 | loss 1.8429 | grad_norm 0.5999701343494377 | step_ok True
+n iteration   99 | lr 3.01e-05 | loss 1.8429 | grad_norm 0.5999701343494377 | step_ok True
+s iteration   99 | lr 3.01e-05 | loss 1.7891 | grad_norm 0.7646029131164056 | step_ok True
+s iteration  199 | lr 3.00e-05 | loss 1.7078 | grad_norm 0.7362759113771518 | step_ok True
+iteration  999 | lr 3.00e-05 | loss 1.4359 | grad_norm 0.7253650929893452 | step_ok True
+
+m iteration   99 | lr 3.01e-05 | loss 1.8072 | grad_norm 0.8433550864141988 | step_ok True
+l iteration   99 | lr 3.01e-05 | loss 1.9120 | grad_norm 1.2634242668657127 | step_ok True

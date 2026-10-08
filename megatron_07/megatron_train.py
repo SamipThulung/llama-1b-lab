@@ -3,6 +3,7 @@ import math
 import os
 import random
 from contextlib import contextmanager
+import time
 
 # torch and numpy imports
 import numpy as np
@@ -18,7 +19,7 @@ from megatron.core import parallel_state
 from megatron.core.datasets.blended_megatron_dataset_builder import (
     BlendedMegatronDatasetBuilder
 )
-
+from megatron.core.datasets.gpt_dataset import GPTDataset, GPTDatasetConfig
 from megatron.core.distributed import finalize_model_grads
 from megatron.core.pipeline_parallel.schedules import get_forward_backward_func
 from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
@@ -30,10 +31,10 @@ from transformer_from_scratch_01.config import (
     XL_MODEL,
 )
 # repo modules
-from megatron_07.simple_tokenizer import SimpleTokenizer
 from megatron_07.model_block import build_llama_model
 from megatron_07.distributed_helper import wrap_model_for_distributed_training, build_optimizer
-from megatron_07.dataset_helper import build_dataloader
+from megatron_07.simple_tokenizer import SimpleTokenizer
+# from megatron_07.dataset_helper import build_dataloader
 
 
 #dataset
@@ -45,9 +46,10 @@ MICRO_BATCH_SIZE = 4
 NUM_MICROBATCHES = 4
 CONTEXT_LENGTH = 512
 VOCAB_SIZE = 32000
-NUM_ITERATIONS = 100
+NUM_ITERATIONS = 2000
 
-MODEL_SIZE = "n"
+
+MODEL_SIZE = "m"
 
 # Parallelism
 TP_SIZE = 2
@@ -76,6 +78,7 @@ MODEL_SIZES = {
     "xl": XL_MODEL,
 }
 _CAUSAL_MASK = None
+VERBOSE_TIMING = True
 
 @contextmanager
 def time_block(name="Code block", rank=0):
@@ -86,8 +89,8 @@ def time_block(name="Code block", rank=0):
         yield
     finally:
         torch.cuda.synchronize()
-        if VERBOSE_TIMING and rank == 0:
-            print(f"[{name}] took {time.perf_counter() - start:.4f} seconds", flush=True)
+        # if VERBOSE_TIMING and rank == 0:
+            # print(f"[{name}] took {time.perf_counter() - start:.4f} seconds", flush=True)
 
 def setup(rank, world_size):
     os.environ["MASTER_ADDR"] = MASTER_ADDR
@@ -131,12 +134,61 @@ def get_causal_mask(device):
         )
     return _CAUSAL_MASK
 
+def build_dataloader():
+    tokenizer = SimpleTokenizer(TOKENIZER_PATH)
+    assert tokenizer.vocab_size == VOCAB_SIZE, (
+        f"tokenizer vocab {tokenizer.vocab_size} != VOCAB_SIZE {VOCAB_SIZE}"
+    )
+
+    config = GPTDatasetConfig(
+        random_seed=SEED,
+        sequence_length=CONTEXT_LENGTH,
+        blend=([DATASET_FILEPATH], None),   # single dataset, no weights
+        split="98,1,1",
+        path_to_cache=CACHE_PATH,
+        reset_position_ids=False,
+        reset_attention_mask=False,
+        eod_mask_loss=False,
+        tokenizer=tokenizer,
+    )
+
+    # Sizes are NUMBER OF SAMPLES (sequences), not tokens.
+    train_samples = NUM_ITERATIONS * NUM_MICROBATCHES * MICRO_BATCH_SIZE * DP_SIZE
+    sizes = [train_samples, 1_000, None]
+
+    # Every rank builds/loads the datasets (rank 0 builds the index first).
+    # TP ranks must see identical data, so no TP-dependent logic here.
+    train_ds, _valid_ds, _test_ds = BlendedMegatronDatasetBuilder(
+        GPTDataset, sizes, lambda: True, config
+    ).build()
+
+    # GPTDataset already handles shuffling internally, so shuffle=False.
+    # The sampler splits data across DP ranks; TP ranks in the same DP
+    # group share the same dp_rank and therefore get identical batches.
+    sampler = DistributedSampler(
+        train_ds,
+        num_replicas=parallel_state.get_data_parallel_world_size(),
+        rank=parallel_state.get_data_parallel_rank(),
+        shuffle=False,
+        drop_last=True,
+    )
+
+    return DataLoader(
+        train_ds,
+        batch_size=MICRO_BATCH_SIZE,
+        sampler=sampler,
+        shuffle=False,
+        num_workers=0,
+        drop_last=True,
+        pin_memory=True,
+    )
+
 
 def forward_step_func(data_iterator, model):
     batch = next(data_iterator)
 
     # GPTDataset returns a dict.
-    with time_block("Loading Batch")
+    with time_block("Loading Batch"):
         x = batch["tokens"].cuda(non_blocking=True).long()
         y = batch["labels"].cuda(non_blocking=True).long()
     loss_mask = batch["loss_mask"].cuda(non_blocking=True).float()
@@ -166,6 +218,152 @@ def forward_step_func(data_iterator, model):
 
     return output, loss_func
 
+@torch.no_grad()
+def test_generation(model, tokenizer, rank):
+
+    model.eval()
+
+    prompts = [
+        "There is a",
+        "Once upon a time",
+    ]
+
+    MAX_NEW_TOKENS = 30
+
+    tp_group = parallel_state.get_tensor_model_parallel_group()
+    tp_rank = parallel_state.get_tensor_model_parallel_rank()
+
+    vocab_per_partition = VOCAB_SIZE // TP_SIZE
+
+    for prompt_idx, prompt in enumerate(prompts):
+
+        input_ids = tokenizer._tok.encode(prompt).ids
+
+        generated = torch.tensor(
+            input_ids,
+            dtype=torch.long,
+            device=torch.cuda.current_device(),
+        ).unsqueeze(0)
+
+        for _ in range(MAX_NEW_TOKENS):
+
+            seq_len = generated.shape[1]
+
+            position_ids = torch.arange(
+                seq_len,
+                device=generated.device,
+                dtype=torch.long,
+            ).unsqueeze(0)
+
+            attention_mask = torch.triu(
+                torch.ones(
+                    1,
+                    1,
+                    seq_len,
+                    seq_len,
+                    dtype=torch.bool,
+                    device=generated.device,
+                ),
+                diagonal=1,
+            )
+
+            output = model(
+                input_ids=generated,
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+                labels=None,
+            )
+
+            # [1, seq_len, 16000]
+            logits = output[:, -1, :]
+
+            local_values, local_indices = torch.max(
+                logits,
+                dim=-1,
+            )
+
+            local_global_index = (
+                local_indices
+                + tp_rank * vocab_per_partition
+            )
+
+            candidates = torch.stack(
+                [
+                    local_values,
+                    local_global_index.float(),
+                ]
+            )
+            gathered_values = [
+                torch.empty_like(local_values)
+                for _ in range(TP_SIZE)
+            ]
+
+            gathered_indices = [
+                torch.empty_like(local_global_index)
+                for _ in range(TP_SIZE)
+            ]
+
+            dist.all_gather(
+                gathered_values,
+                local_values,
+                group=tp_group,
+            )
+
+            dist.all_gather(
+                gathered_indices,
+                local_global_index,
+                group=tp_group,
+            )
+
+            gathered_values = torch.stack(gathered_values)
+            gathered_indices = torch.stack(gathered_indices)
+
+            winner_rank = torch.argmax(
+                gathered_values[:, 0]
+            )
+
+            next_token = gathered_indices[
+                winner_rank,
+                0,
+            ].view(1, 1)
+
+            generated = torch.cat(
+                [generated, next_token],
+                dim=1,
+            )
+
+        if rank == 0:
+
+            token_ids = generated[0].tolist()
+
+            print("\n" + "=" * 70)
+            print(f"OUT-OF-THE-BOX PROMPT {prompt_idx + 1}")
+            print("=" * 70)
+
+            print("\nPrompt:")
+            print(prompt)
+
+            print("\nToken IDs:")
+            print(token_ids)
+
+            print("\nTokens:")
+
+            for token_id in token_ids:
+                token_string = tokenizer._tok.decode(
+                    [token_id]
+                )
+
+                print(
+                    f"{token_id:5d} -> {repr(token_string)}"
+                )
+
+            print("\nGenerated output:")
+            print(
+                tokenizer._tok.decode(token_ids)
+            )
+
+    model.eval()
+
 
 def train(rank, world_size):
     setup(rank, world_size)
@@ -182,15 +380,16 @@ def train(rank, world_size):
     model = wrap_model_for_distributed_training(model)
 
     optimizer = build_optimizer(model, LR, MIN_LR, WEIGHT_DECAY, GRAD_CLIP)
-
+    
+    
     train_dataloader = build_dataloader()
     train_iterator = iter(train_dataloader)
 
     forward_backward_func = get_forward_backward_func()
 
     for iteration in range(NUM_ITERATIONS):
-        print(f"EPOCH:{iteration}")
         lr = get_lr(iteration)
+
         for group in optimizer.param_groups:
             group["lr"] = lr
 
@@ -218,7 +417,7 @@ def train(rank, world_size):
         with time_block("Loss"):
             # Average loss over microbatches, then over the DP group.
             mean_loss = torch.stack([l["lm loss"] for l in losses_per_microbatch]).mean()
-            print(f"Loss: {mean_loss:0.5f}")
+            # print(f"Loss: {mean_loss:0.5f}")
 
         with time_block("Synchronize"):
             dist.all_reduce(
@@ -236,10 +435,26 @@ def train(rank, world_size):
                 flush=True,
             )
 
+    tokenizer = SimpleTokenizer(TOKENIZER_PATH)
+
+    dist.barrier()
+
+    test_generation(
+        model=model,
+        tokenizer=tokenizer,
+        rank=rank,
+    )
+
+    dist.barrier()
+
     cleanup()
+
+    # output testing. 
+    model
 
 
 if __name__ == "__main__":
+    # train()
     mp.spawn(
         train,
         args=(WORLD_SIZE,),

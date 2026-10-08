@@ -1,3 +1,4 @@
+from tokenizers import Tokenizer
 class SimpleTokenizer:
     """Minimal tokenizer shim exposing what GPTDataset needs."""
 
