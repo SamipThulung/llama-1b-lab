@@ -219,3 +219,4 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 dataset_03/TinyStories-train.bin
+megatron_07/megatron_2b.bin

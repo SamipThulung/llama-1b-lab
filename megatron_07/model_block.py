@@ -2,8 +2,11 @@
 from megatron.core.models.gpt.gpt_layer_specs import get_gpt_layer_local_spec
 from megatron.core.models.gpt.gpt_model import GPTModel
 from megatron.core.transformer.transformer_config import TransformerConfig
+import torch
+import torch.nn.functional as F
 
-def build_llama_model(model_detail):
+
+def build_llama_model(model_detail, VOCAB_SIZE, TP_SIZE, PP_SIZE, CONTEXT_LENGTH):
     num_layers = model_detail["num_layers"]
     hidden = model_detail["d_model"]
     heads = model_detail["num_heads"]

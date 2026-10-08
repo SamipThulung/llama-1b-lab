@@ -12,16 +12,12 @@ from tokenizers import Tokenizer
 
 from megatron.core import parallel_state
 from megatron.core.datasets.blended_megatron_dataset_builder import (
-    BlendedMegatronDatasetBuilder,
+    BlendedMegatronDatasetBuilder
 )
 
-from megatron.core.distributed import (
-    DistributedDataParallel,
-    DistributedDataParallelConfig,
-    finalize_model_grads,
-)
+from megatron.core.distributed import finalize_model_grads
 
-from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
+
 from megatron.core.pipeline_parallel.schedules import get_forward_backward_func
 from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
 
@@ -35,8 +31,8 @@ from transformer_from_scratch_01.config import (
     XL_MODEL,
 )
 from megatron_07.simple_tokenizer import SimpleTokenizer
-from megatron_07.model_block import build_llamma_model
-from megatron_07.distributed_helper import wrap_model_for_distributed_training
+from megatron_07.model_block import build_llama_model
+from megatron_07.distributed_helper import wrap_model_for_distributed_training, build_optimizer
 from megatron_07.dataset_helper import build_dataloader
 
 
@@ -166,11 +162,11 @@ def train(rank, world_size):
     # Must run before model init so TP-region RNG states are set up.
     model_parallel_cuda_manual_seed(SEED)
 
-    model = build_llamma_model(MODEL_SIZES[MODEL_SIZE])
+    model = build_llama_model(MODEL_SIZES[MODEL_SIZE], VOCAB_SIZE, TP_SIZE, PP_SIZE, CONTEXT_LENGTH)
     model.cuda()
     model = wrap_model_for_distributed_training(model)
 
-    optimizer = build_optimizer(model)
+    optimizer = build_optimizer(model, LR, MIN_LR, WEIGHT_DECAY, GRAD_CLIP)
 
     train_dataloader = build_dataloader()
     train_iterator = iter(train_dataloader)

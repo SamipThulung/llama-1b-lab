@@ -1,2 +1,4 @@
 gdown
 einops
+tokenizers
+megatron-core

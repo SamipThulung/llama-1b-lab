@@ -1,3 +1,7 @@
+from megatron.core.distributed import (
+    DistributedDataParallel,
+    DistributedDataParallelConfig)
+from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 
 from megatron.core.transformer.module import Float16Module
 
@@ -19,7 +23,7 @@ def wrap_model_for_distributed_training(model):
     return model
 
 
-def build_optimizer(model):
+def build_optimizer(model, LR, MIN_LR, WEIGHT_DECAY, GRAD_CLIP):
     optimizer_config = OptimizerConfig(
         optimizer="adam",
         lr=LR,
